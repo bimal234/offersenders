@@ -1,10 +1,12 @@
 
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
   "functions": {
-    "api/**/*.js": {
+    "api/send-sms.js": {
+      "runtime": "nodejs18.x",
       "maxDuration": 30
+    },
+    "api/test.js": {
+      "runtime": "nodejs18.x"
     }
   }
 }
