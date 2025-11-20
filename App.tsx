@@ -372,6 +372,8 @@ const App = () => {
                 const config = await getApiConfig();
                 const apiKey = config.apiKey || auth; // Use database config or fallback to provided auth
                 
+                const apiUrl = config.apiUrl || 'https://smseveryone.com/api/campaign';
+                
                 const response = await fetch('/api/send-sms', {
                     method: 'POST',
                     headers: {
@@ -381,38 +383,45 @@ const App = () => {
                         phone: formattedPhone,
                         message: msg,
                         apiKey: apiKey,
-                        apiUrl: config.apiUrl,
+                        apiUrl: apiUrl,
                         originator: '3247'
                     }),
                 });
 
-                const text = await response.text();
+                // If 404, the function doesn't exist - fall back to direct call
+                if (response.status === 404) {
+                    console.warn('Serverless function not found (404), falling back to direct API call');
+                    // Fall through to development strategies below
+                } else {
+                    const text = await response.text();
 
-                // If Auth failed
-                if (response.status === 401) {
-                    return { success: false, status: 401, text };
-                }
-                
-                // Check if response is successful (200 OK) and API returned Code: 0
-                if (response.ok) {
-                    try {
-                        const jsonResponse = JSON.parse(text);
-                        // SMSEveryone API returns Code: 0 for success
-                        if (jsonResponse.Code === 0) {
-                            return { success: true, status: response.status, text };
-                        } else {
-                            // API returned an error code (e.g., -111, -117, -202)
-                            return { success: false, status: response.status, text: jsonResponse.Message || text };
-                        }
-                    } catch {
-                        // If response is not JSON but status is OK, consider it success
-                        return { success: true, status: response.status, text };
+                    // If Auth failed
+                    if (response.status === 401) {
+                        return { success: false, status: 401, text };
                     }
-                }
+                    
+                    // Check if response is successful (200 OK) and API returned Code: 0
+                    if (response.ok) {
+                        try {
+                            const jsonResponse = JSON.parse(text);
+                            // SMSEveryone API returns Code: 0 for success
+                            if (jsonResponse.Code === 0) {
+                                return { success: true, status: response.status, text };
+                            } else {
+                                // API returned an error code (e.g., -111, -117, -202)
+                                return { success: false, status: response.status, text: jsonResponse.Message || text };
+                            }
+                        } catch {
+                            // If response is not JSON but status is OK, consider it success
+                            return { success: true, status: response.status, text };
+                        }
+                    }
 
-                return { success: false, status: response.status, text };
+                    return { success: false, status: response.status, text };
+                }
             } catch (error: any) {
-                return { success: false, status: 500, text: error.message || 'Network error' };
+                console.error('Serverless function error:', error);
+                // Fall through to development strategies
             }
         }
 
