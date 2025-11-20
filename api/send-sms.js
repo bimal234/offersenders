@@ -11,21 +11,30 @@ export default async function handler(request, response) {
   }
 
   // 2. Get data from the App
-  // We accept BOTH 'message' and 'body' to be robust.
-  const { to, message, body, from, apiKey, apiUrl } = request.body;
+  // SMSEveryone API format: Message, Originator, Destinations (array), Action
+  const { phone, message, apiKey, apiUrl, originator } = request.body;
 
-  // Check if we have at least one content field (message or body)
-  if (!to || (!message && !body) || !apiKey || !apiUrl) {
-    return response.status(400).json({ error: 'Missing required fields (to, message/body, apiKey, apiUrl)' });
+  // Check if we have required fields
+  if (!phone || !message || !apiKey || !apiUrl) {
+    return response.status(400).json({ error: 'Missing required fields (phone, message, apiKey, apiUrl)' });
   }
 
-  // Construct Payload for External API
-  // We send both keys if possible to ensure compatibility with SMSEveryone and generic wrappers
-  const externalPayload = {
-    to: to,
-    from: from,
-    body: body || message,      // Standard
-    message: message || body    // Legacy/Specific
+  // Format phone number - ensure it's in international format
+  let formattedPhone = phone.replace(/[^0-9]/g, '');
+  // If starts with 0, replace with country code (assuming NZ = 64)
+  if (formattedPhone.startsWith('0')) {
+    formattedPhone = '64' + formattedPhone.substring(1);
+  } else if (!formattedPhone.startsWith('64') && !formattedPhone.startsWith('61')) {
+    // If no country code, assume NZ (64)
+    formattedPhone = '64' + formattedPhone;
+  }
+
+  // Construct SMSEveryone API payload format
+  const smsPayload = {
+    Message: message,
+    Originator: originator || '3247', // Default sender number
+    Destinations: [formattedPhone],
+    Action: 'create'
   };
 
   try {
@@ -37,14 +46,21 @@ export default async function handler(request, response) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
-      body: JSON.stringify(externalPayload),
+      body: JSON.stringify(smsPayload),
     });
 
     // 4. Return the result back to your App
     const data = await res.text();
+    
+    // Preserve the status code and response from SMSEveryone API
     return response.status(res.status).send(data);
 
   } catch (error) {
-    return response.status(500).json({ error: error.message });
+    console.error('SMS API Error:', error);
+    return response.status(500).json({ 
+      error: error.message || 'Failed to send SMS',
+      Code: -1,
+      Message: 'Server error: ' + (error.message || 'Unknown error')
+    });
   }
 }

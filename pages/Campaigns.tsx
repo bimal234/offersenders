@@ -14,11 +14,10 @@ interface CampaignsProps {
   onBulkSend: (
       message: string, 
       smsCount: number,
-      passwordUser: string, 
       onProgress: (processed: number, total: number, success: number, failed: number, lastError?: string) => void,
       onLog: (msg: string) => void
   ) => Promise<{ success: number; failed: number }>;
-  onTestConnection: (password: string) => Promise<{ success: boolean; message: string; needsUnlock?: boolean }>;
+  onTestConnection: () => Promise<{ success: boolean; message: string; needsUnlock?: boolean }>;
   onCreateCampaign: (campaignData: Omit<Campaign, 'id' | 'status' | 'business_id' | 'created_at' | 'customers' | 'smsUsed'>) => Promise<void>;
 }
 
@@ -48,7 +47,6 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
   });
 
   const [bulkMessage, setBulkMessage] = useState('');
-  const [smsPassword, setSmsPassword] = useState(''); 
   
   // Test Connection State
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
@@ -72,6 +70,14 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Auto-test connection when bulk modal opens
+  useEffect(() => {
+    if (isBulkModalOpen && testStatus === 'idle') {
+      handleTest();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBulkModalOpen]);
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,13 +114,8 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
   };
   
   const handleTest = async () => {
-      if (!smsPassword.trim()) {
-          setTestStatus('failed');
-          setTestMessage('Password required');
-          return;
-      }
       setTestStatus('testing');
-      setTestMessage('Verifying...');
+      setTestMessage('Verifying connection...');
       setIsProxyLocked(false);
 
       // SAFETY TIMER: Force stop after 10 seconds no matter what
@@ -126,7 +127,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
       }, 10000);
 
       try {
-          const result = await onTestConnection(smsPassword);
+          const result = await onTestConnection();
           
           if (!isTimedOut) {
               clearTimeout(safetyTimer); // Clear the safety timer if request finished
@@ -157,8 +158,13 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
       return;
     }
     
-    if (testStatus !== 'success') {
-        if(!window.confirm("Connection not verified yet. Are you sure you want to try sending?")) return;
+    if (testStatus === 'failed') {
+        if(!window.confirm("Connection verification failed. Are you sure you want to try sending anyway?")) return;
+    }
+    
+    if (testStatus === 'testing') {
+        alert("Please wait for connection verification to complete.");
+        return;
     }
 
     setIsSending(true);
@@ -176,7 +182,6 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
         const result = await onBulkSend(
             bulkMessage, 
             customerCount,
-            smsPassword,
             (processed, total, success, failed, errorMsg) => {
                 setProcessedCount(processed);
                 setSuccessCount(success);
@@ -287,7 +292,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
             )}
 
             {!isSending && !isFinished && !isProxyLocked && (
-                <Button onClick={handleConfirmBulkSend} disabled={!bulkMessage.trim() || testStatus !== 'success'}>
+                <Button onClick={handleConfirmBulkSend} disabled={!bulkMessage.trim() || testStatus === 'testing'}>
                     Send to {customerCount} Customers
                 </Button>
             )}
@@ -300,26 +305,13 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
         <div className="space-y-4">
           <p className="text-sm text-gray-600">This will send to <strong>{customerCount}</strong> customers via <strong>SMSEveryone</strong>.</p>
           
-          {/* Credentials Section */}
-          <div className={`p-3 rounded border ${testStatus === 'success' ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
-              <label htmlFor="sms-password" className="block text-sm font-bold text-gray-700">API Password</label>
-              <div className="flex space-x-2 mt-1">
-                  <input 
-                      type="password" 
-                      id="sms-password" 
-                      value={smsPassword} 
-                      onChange={e => setSmsPassword(e.target.value)} 
-                      className="block w-full rounded-md border-gray-300 shadow-sm text-sm" 
-                      placeholder="Enter your NEW password"
-                      disabled={isSending || isFinished}
-                  />
-                  <button 
-                    onClick={handleTest}
-                    disabled={isSending || !smsPassword || testStatus === 'testing'}
-                    className="px-3 py-1 bg-gray-800 text-white text-xs font-bold rounded hover:bg-gray-700 whitespace-nowrap disabled:opacity-50"
-                  >
-                    {testStatus === 'testing' ? 'Checking...' : 'Verify Credentials'}
-                  </button>
+          {/* Connection Status Section */}
+          <div className={`p-3 rounded border ${testStatus === 'success' ? 'bg-green-50 border-green-200' : testStatus === 'failed' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+              <div className="flex items-center justify-between">
+                  <label className="block text-sm font-bold text-gray-700">Connection Status</label>
+                  {testStatus === 'testing' && (
+                      <span className="text-xs text-gray-500">Verifying...</span>
+                  )}
               </div>
               
               {/* Status Feedback */}
@@ -329,11 +321,11 @@ export const Campaigns: React.FC<CampaignsProps> = ({ campaigns, smsUsed, smsLim
                           testStatus === 'success' ? 'text-green-700' : 
                           testStatus === 'failed' ? 'text-red-600' : 'text-gray-600'
                       }`}>
-                          Status: {testMessage}
+                          {testMessage}
                       </div>
-                      {testStatus === 'failed' && testMessage.includes('500') && (
-                          <div className="mt-1 text-xs text-gray-600">
-                              <strong>Tip:</strong> A 500 error usually means the server is temporarily down. Try again in a few moments, or check if you're running locally (use the local proxy).
+                      {testStatus === 'failed' && testMessage.includes('not configured') && (
+                          <div className="mt-2 text-xs text-gray-600">
+                              <strong>Note:</strong> Please contact your administrator to configure SMS API credentials in the Admin Dashboard.
                           </div>
                       )}
                   </div>

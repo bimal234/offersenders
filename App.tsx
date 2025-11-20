@@ -334,6 +334,27 @@ const App = () => {
       return btoa(`${user}:${password}`);
   };
 
+  // Get API config from database
+  const getApiConfig = async () => {
+      try {
+          const { data } = await supabase.from('app_config').select('*').eq('id', 'global').single();
+          return {
+              apiUrl: data?.sms_api_url || 'https://smseveryone.com/api/campaign',
+              apiKey: data?.sms_api_key || null
+          };
+      } catch (error) {
+          return {
+              apiUrl: 'https://smseveryone.com/api/campaign',
+              apiKey: null
+          };
+      }
+  };
+
+  // Check if we're in production (not localhost)
+  const isProduction = () => {
+      return window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+  };
+
   const sendSMS = async (phone: string, msg: string, auth: string): Promise<{ success: boolean, status: number, text: string }> => {
         // Format phone number - ensure it's in international format
         let formattedPhone = phone.replace(/[^0-9]/g, '');
@@ -345,6 +366,57 @@ const App = () => {
             formattedPhone = '64' + formattedPhone;
         }
 
+        // PRODUCTION: Use serverless function (no CORS issues)
+        if (isProduction()) {
+            try {
+                const config = await getApiConfig();
+                const apiKey = config.apiKey || auth; // Use database config or fallback to provided auth
+                
+                const response = await fetch('/api/send-sms', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        phone: formattedPhone,
+                        message: msg,
+                        apiKey: apiKey,
+                        apiUrl: config.apiUrl,
+                        originator: '3247'
+                    }),
+                });
+
+                const text = await response.text();
+
+                // If Auth failed
+                if (response.status === 401) {
+                    return { success: false, status: 401, text };
+                }
+                
+                // Check if response is successful (200 OK) and API returned Code: 0
+                if (response.ok) {
+                    try {
+                        const jsonResponse = JSON.parse(text);
+                        // SMSEveryone API returns Code: 0 for success
+                        if (jsonResponse.Code === 0) {
+                            return { success: true, status: response.status, text };
+                        } else {
+                            // API returned an error code (e.g., -111, -117, -202)
+                            return { success: false, status: response.status, text: jsonResponse.Message || text };
+                        }
+                    } catch {
+                        // If response is not JSON but status is OK, consider it success
+                        return { success: true, status: response.status, text };
+                    }
+                }
+
+                return { success: false, status: response.status, text };
+            } catch (error: any) {
+                return { success: false, status: 500, text: error.message || 'Network error' };
+            }
+        }
+
+        // DEVELOPMENT: Use local proxy or CORS strategies
         // SMSEveryone API payload format
         const payloadObj = { 
             Message: msg,
@@ -353,22 +425,11 @@ const App = () => {
             Action: 'create'
         };
 
-        // REORDERED STRATEGIES:
-        // 1. CORS Anywhere (PRIORITY for Online Preview): This prevents hanging. It fails fast (403) if locked, allowing user to unlock.
-        // 2. Local Proxy (FALLBACK): Great for VS Code, but often hangs in Cloud Preview.
-        // 3. Direct: Fail safe.
+        // REORDERED STRATEGIES for local development:
+        // 1. Local Proxy (VS Code): Great for local development
+        // 2. CORS Anywhere: Fallback for online preview
+        // 3. Direct: Fail safe
         const strategies = [
-            {
-                name: 'CORS Anywhere (Priority)',
-                url: 'https://cors-anywhere.herokuapp.com/https://smseveryone.com/api/campaign',
-                headers: { 
-                    'Authorization': `Basic ${auth}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                timeout: 10000 // Longer timeout for the proxy
-            },
             { 
                 name: 'Local Proxy (VS Code)', 
                 url: '/sms-proxy/api/campaign',
@@ -377,7 +438,18 @@ const App = () => {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                timeout: 3000 // Very short timeout to prevent hanging in cloud
+                timeout: 5000
+            },
+            {
+                name: 'CORS Anywhere (Fallback)',
+                url: 'https://cors-anywhere.herokuapp.com/https://smseveryone.com/api/campaign',
+                headers: { 
+                    'Authorization': `Basic ${auth}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                timeout: 10000
             },
             {
                 name: 'Direct Fallback',
@@ -399,7 +471,6 @@ const App = () => {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), strategy.timeout); 
 
-                // console.log(`Trying strategy: ${strategy.name}`); 
                 const response = await fetch(strategy.url, {
                     method: 'POST',
                     headers: strategy.headers,
@@ -442,7 +513,6 @@ const App = () => {
                 lastResult = { success: false, status: response.status, text };
 
             } catch (err: any) {
-                // console.log(`Strategy ${strategy.name} failed: ${err.message}`);
                 // Continue to next strategy
             }
         }
@@ -452,12 +522,15 @@ const App = () => {
   };
 
   // --- CONNECTION TESTER ---
-  const handleTestConnection = async (passwordUser: string): Promise<{ success: boolean; message: string; needsUnlock?: boolean }> => {
-      if (!passwordUser) return { success: false, message: 'Password required' };
+  const handleTestConnection = async (): Promise<{ success: boolean; message: string; needsUnlock?: boolean }> => {
+      // Get API credentials from database
+      const config = await getApiConfig();
+      if (!config.apiKey) {
+          return { success: false, message: 'API credentials not configured. Please contact admin to set up SMS credentials.' };
+      }
       
-      const auth = getAuthHeader(passwordUser);
       // Send dummy message to verify connection
-      const result = await sendSMS('64000000000', 'Ping Test', auth);
+      const result = await sendSMS('64000000000', 'Ping Test', config.apiKey);
       
       if (result.status === 403 && result.text.includes('corsdemo')) {
           return { success: false, message: 'Proxy Locked', needsUnlock: true };
@@ -530,18 +603,24 @@ const App = () => {
   const handleBulkSend = async (
       message: string, 
       smsCount: number,
-      passwordUser: string, 
       onProgress: (processed: number, total: number, success: number, failed: number, lastError?: string) => void,
       onLog: (msg: string) => void
   ) => {
     if (!loggedInBusiness) return { success: 0, failed: 0 };
     
+    // Get API credentials from database
+    const config = await getApiConfig();
+    if (!config.apiKey) {
+        onLog("ERROR: API credentials not configured. Please contact admin.");
+        onProgress(0, customers.length, 0, 0, "NO_CREDENTIALS");
+        return { success: 0, failed: customers.length };
+    }
+    
     let successCount = 0;
     let failedCount = 0;
     const total = customers.length;
-    const AUTH = getAuthHeader(passwordUser);
 
-    onLog("Initializing Sender v15 (Prioritized Relay)...");
+    onLog("Initializing SMS Sender...");
     
     for (let i = 0; i < customers.length; i++) {
         const customer = customers[i];
@@ -550,7 +629,7 @@ const App = () => {
         
         onLog(`[${i+1}/${total}] Sending to ${cleanPhone}...`);
         
-        const result = await sendSMS(cleanPhone, message, AUTH);
+        const result = await sendSMS(cleanPhone, message, config.apiKey);
         
         if (result.success) {
             successCount++;
