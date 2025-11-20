@@ -1,22 +1,43 @@
 
-export default async function handler(request, response) {
+export default async function handler(req, res) {
   // 1. Enable CORS so your website can talk to this function
-  response.setHeader('Access-Control-Allow-Origin', '*');
-  response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   // Handle pre-flight check
-  if (request.method === 'OPTIONS') {
-    return response.status(200).end();
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Only allow POST requests
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed. Use POST.' });
   }
 
   // 2. Get data from the App
   // SMSEveryone API format: Message, Originator, Destinations (array), Action
-  const { phone, message, apiKey, apiUrl, originator } = request.body;
+  let body;
+  try {
+    body = req.body;
+  } catch (error) {
+    return res.status(400).json({ error: 'Invalid request body', details: error.message });
+  }
+
+  const { phone, message, apiKey, apiUrl, originator } = body || {};
 
   // Check if we have required fields
   if (!phone || !message || !apiKey || !apiUrl) {
-    return response.status(400).json({ error: 'Missing required fields (phone, message, apiKey, apiUrl)' });
+    console.error('Missing required fields:', { phone: !!phone, message: !!message, apiKey: !!apiKey, apiUrl: !!apiUrl });
+    return res.status(400).json({ 
+      error: 'Missing required fields', 
+      missing: {
+        phone: !phone,
+        message: !message,
+        apiKey: !apiKey,
+        apiUrl: !apiUrl
+      }
+    });
   }
 
   // Format phone number - ensure it's in international format
@@ -39,7 +60,7 @@ export default async function handler(request, response) {
 
   try {
     // 3. Send the request to SMSEveryone from the SERVER (no CORS issues here)
-    const res = await fetch(apiUrl, {
+    const smsResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${apiKey}`,
@@ -50,14 +71,14 @@ export default async function handler(request, response) {
     });
 
     // 4. Return the result back to your App
-    const data = await res.text();
+    const data = await smsResponse.text();
     
     // Preserve the status code and response from SMSEveryone API
-    return response.status(res.status).send(data);
+    return res.status(smsResponse.status).send(data);
 
   } catch (error) {
     console.error('SMS API Error:', error);
-    return response.status(500).json({ 
+    return res.status(500).json({ 
       error: error.message || 'Failed to send SMS',
       Code: -1,
       Message: 'Server error: ' + (error.message || 'Unknown error')
