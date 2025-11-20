@@ -366,14 +366,14 @@ const App = () => {
             formattedPhone = '64' + formattedPhone;
         }
 
-        // PRODUCTION: Use serverless function (no CORS issues)
+        // PRODUCTION: Try serverless function first, fallback to direct API call
         if (isProduction()) {
+            const config = await getApiConfig();
+            const apiKey = config.apiKey || auth;
+            const smsApiUrl = config.apiUrl || 'https://smseveryone.com/api/campaign';
+            
+            // Try serverless function first
             try {
-                const config = await getApiConfig();
-                const apiKey = config.apiKey || auth; // Use database config or fallback to provided auth
-                
-                const apiUrl = config.apiUrl || 'https://smseveryone.com/api/campaign';
-                
                 const response = await fetch('/api/send-sms', {
                     method: 'POST',
                     headers: {
@@ -383,15 +383,15 @@ const App = () => {
                         phone: formattedPhone,
                         message: msg,
                         apiKey: apiKey,
-                        apiUrl: apiUrl,
+                        apiUrl: smsApiUrl,
                         originator: '3247'
                     }),
                 });
 
-                // If 404, the function doesn't exist - fall back to direct call
+                // If 404, serverless function doesn't exist - use direct API call
                 if (response.status === 404) {
-                    console.warn('Serverless function not found (404), falling back to direct API call');
-                    // Fall through to development strategies below
+                    console.warn('Serverless function not available, using direct API call');
+                    // Continue to direct API call below
                 } else {
                     const text = await response.text();
 
@@ -420,8 +420,47 @@ const App = () => {
                     return { success: false, status: response.status, text };
                 }
             } catch (error: any) {
-                console.error('Serverless function error:', error);
-                // Fall through to development strategies
+                console.warn('Serverless function error, using direct API call:', error.message);
+                // Continue to direct API call below
+            }
+            
+            // Fallback: Direct API call (may have CORS issues, but we try)
+            try {
+                const payloadObj = { 
+                    Message: msg,
+                    Originator: '3247',
+                    Destinations: [formattedPhone],
+                    Action: 'create'
+                };
+
+                const directResponse = await fetch(smsApiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Basic ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(payloadObj),
+                });
+
+                const text = await directResponse.text();
+
+                if (directResponse.ok) {
+                    try {
+                        const jsonResponse = JSON.parse(text);
+                        if (jsonResponse.Code === 0) {
+                            return { success: true, status: directResponse.status, text };
+                        } else {
+                            return { success: false, status: directResponse.status, text: jsonResponse.Message || text };
+                        }
+                    } catch {
+                        return { success: true, status: directResponse.status, text };
+                    }
+                }
+
+                return { success: false, status: directResponse.status, text };
+            } catch (directError: any) {
+                return { success: false, status: 0, text: `Direct API call failed: ${directError.message}` };
             }
         }
 
