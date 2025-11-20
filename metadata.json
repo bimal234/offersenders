@@ -1,0 +1,5 @@
+{
+  "name": "OfferSender",
+  "description": "A web-based SMS marketing platform for small businesses to send promotional offers to their customers. Features include customer management, campaign creation, and subscription tiers with SMS quotas.",
+  "requestFramePermissions": []
+}
