@@ -1,4 +1,4 @@
-
+// Vercel Serverless Function
 export default async function handler(req, res) {
   // 1. Enable CORS so your website can talk to this function
   res.setHeader('Access-Control-Allow-Origin', '*');
